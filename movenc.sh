@@ -78,6 +78,17 @@ jffprobe() {
     jq <<<"${out}"
 }
 
+# usage: mjq [-r] <query> <json>
+# dies on failure
+mjq() {
+    local raw
+    if [[ "${1}" == "-r" ]]; then
+        raw="-r"
+        shift
+    fi
+    jq ${raw} <<<"${2}" "${1}" || die "jq failed"
+}
+
 # initialise the MEDIA_JSON metadata
 init_media_json() {
     if [[ -n "${MEDIA_JSON}" ]]; then
@@ -117,12 +128,12 @@ best_lang_astream() {
 
     local query streams i
 
-    query=".[\"media\"].[\"track\"][] | select(.[\"@type\"] == \"Audio\") | "
-    query+="select(.[\"Language\"] == \"${1}\")"
+    query="[ .[\"media\"].[\"track\"][] | select(.[\"@type\"] == \"Audio\") | "
+    query+="select(.[\"Language\"] == \"${1}\") ]"
 
-    streams="$(jq <<<"${MEDIA_JSON}" "[ ${query} ]" || die "jq failed")"
+    streams="$(mjq "${query}" "${MEDIA_JSON}")"
 
-    if [[ "$(jq <<<"${streams}" "length" || die "jq failed")" -eq 0 ]]; then
+    if [[ "$(mjq "length" "${streams}")" -eq 0 ]]; then
         die "No stream of lang ${1} found"
     fi
 
@@ -144,13 +155,13 @@ best_lang_astream() {
 
     i=0
     while (( i < ${#queries[@]} )); do
-        result="$(jq <<<"${streams}" "${queries[${i}]}" || die "jq failed")"
+        result="$(mjq "${queries[${i}]}" "${streams}")"
         # if only 1 result stream use that
-        if [[ "$(jq <<<"${result}" "length" || die "jq failed")" -eq 1 ]]; then
-            echo -e "0:$(jq -r <<<"${result}" ".[0][\"ID\"] | tonumber - 1")"
+        if [[ "$(mjq "length" "${result}")" -eq 1 ]]; then
+            echo -e "0:$(mjq -r ".[0][\"ID\"] | tonumber - 1" "${result}")"
             return
         # if more than one continue with those
-        elif [[ "$(jq <<<"${result}" "length" || die "jq failed")" -gt 0 ]]; then
+        elif [[ "$(mjq "length" "${result}")" -gt 0 ]]; then
             streams="${result}"
         fi
         # start next query
@@ -158,17 +169,55 @@ best_lang_astream() {
     done
     
     # fall back to using the first stream left
-    echo -e "0:$(jq -r <<<"${streams}" ".[0][\"ID\"] | tonumber - 1")"
+    echo -e "0:$(mjq -r ".[0][\"ID\"] | tonumber - 1" "${streams}")"
+}
+
+# check if video stream is interlaced
+# if it is apply bwdif
+deinterlace() {
+    assert_media_json
+
+    local query scantype
+
+    query="[ .[\"media\"].[\"track\"][] | select(.[\"@type\"] == \"Video\") ] | first | .[\"ScanType\"]"
+    scantype="$(mjq -r "${query}" "${MEDIA_JSON}")"
+
+    case "${scantype}" in
+        Interlaced)
+            info "Detected interlaced video - applying bwdif filter"
+            echo -n "bwdif"
+            ;;
+        Progressive)
+            ;;
+        *)
+            info "Don't know how to handle scantype ${scantype}. Check manually if needed."
+            ;;
+    esac
+}
+
+# get sar filter
+sar() {
+    assert_media_json
+
+    local query result
+
+    query="[ .[\"media\"].[\"track\"][] | select(.[\"@type\"] == \"Video\") ] | first | .[\"PixelAspectRatio\"]"
+    result="$(mjq -r "${query}" "${MEDIA_JSON}")"
+
+    case "${result}" in
+        *.*)
+            info "Setting SAR ${result}"
+            echo -n "setsar=sar=${result}"
+            ;;
+        *)
+            die "Invalid SAR format ${result}"
+            ;;
+    esac
 }
 
 # get ffprobe attribute for v:0
 get_vattr() {
     jffprobe v:0 | jq --raw-output ".streams[0].${1}"
-}
-
-# get sample_aspect_ratio via ffprobe
-get_sar() {
-    get_vattr sample_aspect_ratio | sed -e 's|:|/|'
 }
 
 # get resolution via ffprobe if not cropped, else use crop resolution
@@ -204,18 +253,8 @@ detect_crop() {
 
 # get crop filter string
 get_crop() {
-    [[ -n "${CROP}" ]] && echo -n ",crop=${CROP}"
+    [[ -n "${CROP}" ]] && echo -n "crop=${CROP}"
     return 0
-}
-
-# apply deinterlace filter where needed
-get_deinterlace() {
-    case "$(get_vattr field_order)" in
-        tt|bt)
-            info "Detected interlaced video - applying bwdif filter"
-            echo -n ",bwdif" 
-            ;;
-    esac
 }
 
 # $1: stream_spec $2: tag
@@ -384,9 +423,12 @@ add_vflags() {
     else
         _FFMPEG_ARGS+=( -g "${gop}" )
     fi
-    # always apply sar filter to get correct aspect ratio
-    # conditionally add crop filter
-    _FFMPEG_ARGS+=( -filter:v "setsar=$(get_sar)$(get_deinterlace)$(get_crop)" )
+
+    # setup video filters
+    local vfilter=( "$(sar)" "$(deinterlace)" "$(get_crop)" )
+    IFS=","
+    _FFMPEG_ARGS+=( -filter:v "${vfilter[*]}" )
+    unset IFS
 }
 
 # audio related flags
