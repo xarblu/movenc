@@ -15,8 +15,7 @@
 # mkvpropedit (mkvtoolnix)
 #
 # TODO:
-# - auto audio/subtitle stream detection
-#   based on best bitrate/codec/channels
+# - auto subtitle stream detection
 # - select default audio codec based on what original is
 # - default audio codec copy?
 # - av1 + opus profile
@@ -38,7 +37,16 @@ declare MEDIA_JSON
 
 # helper
 die() {
-    echo "[ERROR] ${*}" 1>&2
+    echo "[ERROR] ${FUNCNAME[0]}: ${*}" 1>&2
+    echo "Stacktrace:"
+    local stackheight=${#FUNCNAME[@]}
+    local stackcur=0
+    
+    while (( stackcur < stackheight )); do
+        echo -e "  ${FUNCNAME[${stackcur}]} at line ${BASH_LINENO[${stackcur}]} in ${BASH_SOURCE[$(( stackcur + 1 ))]}"
+        stackcur=$(( stackcur + 1 ))
+    done
+
     exit 1
 }
 
@@ -75,26 +83,82 @@ init_media_json() {
     if [[ -n "${MEDIA_JSON}" ]]; then
         info "Overwriting previously set MEDIA_JSON"
     fi
-    MEDIA_JSON="$(mediainfo --output=JSON)"
+    if [[ -z "${INFILE}" ]]; then
+        die "INFILE is empty"
+    fi
+    MEDIA_JSON="$(mediainfo --output=JSON "${INFILE}" | tr -d '\n')"
 }
 
-# die if MEDIA_JSON is empty or invalid
-assert_media_json() {
-    if [[ -z "${MEDIA_JSON}" ]]; then
+# die if $1 is empty or invalid
+assert_json() {
+    if [[ -z "${1}" ]]; then
         die "MEDIA_JSON is unset"
     fi
-    if jq <<<"${MEDIA_JSON}"; then
-        die "MEDIA_JSON is not valid json"
+    if ! jq <<<"${1}" &>/dev/null; then
+        die "MEDIA_JSON is not valid json. Got: ${MEDIA_JSON}"
     fi
+}
+
+assert_media_json() {
+    assert_json "${MEDIA_JSON}"
 }
 
 # select the best quality audio stream for language $1
+# returns the ffmpeg stream id as 0:ID if found else dies
 best_lang_astream() {
     if [[ ${#} -ne 1 ]]; then
-        die "best_lang_astream takes 1 arg: lang"
+        die "takes 1 arg: lang"
+    fi
+    if [[ ${#1} -ne 2 ]]; then
+        die "lang should be a 2 letter identifier"
     fi
 
+    assert_media_json
 
+    local query streams i
+
+    query=".[\"media\"].[\"track\"][] | select(.[\"@type\"] == \"Audio\") | "
+    query+="select(.[\"Language\"] == \"${1}\")"
+
+    streams="$(jq <<<"${MEDIA_JSON}" "[ ${query} ]" || die "jq failed")"
+
+    if [[ "$(jq <<<"${streams}" "length" || die "jq failed")" -eq 0 ]]; then
+        die "No stream of lang ${1} found"
+    fi
+
+    # parameters to sort by
+    queries=(
+        # lossless
+        "[ .[] | select(.[\"Compression Mode\"] == \"Lossless\") ]"
+        # TrueHD
+        "[ .[] | select(.[\"CodecID\"] == \"A_TRUEHD\") ]"
+        # DTS
+        "[ .[] | select(.[\"CodecID\"] == \"A_DTS\") ]"
+        # AC3
+        "[ .[] | select(.[\"CodecID\"] == \"A_AC3\") ]"
+        # most channels
+        "[ (sort_by(.[\"Channels\"] | tonumber) | reverse | .[0][\"Channels\"] | tonumber) as \$max | .[] | select(.[\"Channels\"] | tonumber == \$max) ]"
+        # highest avg bitrate
+        "[ (sort_by(.[\"BitRate\"] | tonumber) | reverse | .[0][\"BitRate\"] | tonumber) as \$max | .[] | select(.[\"BitRate\"] | tonumber == \$max) ]"
+        )
+
+    i=0
+    while (( i < ${#queries[@]} )); do
+        result="$(jq <<<"${streams}" "${queries[${i}]}" || die "jq failed")"
+        # if only 1 result stream use that
+        if [[ "$(jq <<<"${result}" "length" || die "jq failed")" -eq 1 ]]; then
+            echo -e "0:$(jq -r <<<"${result}" ".[0][\"ID\"] | tonumber - 1")"
+            return
+        # if more than one continue with those
+        elif [[ "$(jq <<<"${result}" "length" || die "jq failed")" -gt 0 ]]; then
+            streams="${result}"
+        fi
+        # start next query
+        i="$(( i + 1 ))"
+    done
+    
+    # fall back to using the first stream left
+    echo -e "0:$(jq -r <<<"${streams}" ".[0][\"ID\"] | tonumber - 1")"
 }
 
 # get ffprobe attribute for v:0
@@ -442,6 +506,9 @@ INFILE="${1}"
 
 # arg $2 is output file (defaults to ${INFILE%.*}+done.mkv)
 OUTFILE="${2:-${INFILE%.*}+done.mkv}"
+
+# setup media metada
+init_media_json
 
 # check if created environment is sane
 check_env
