@@ -29,11 +29,7 @@
 #       - layout mapping (mainly 5.1(side) -> 5.1)
 #       - explicit -mapping_family 0 or 1
 
-set -e
-
-# global vars modified during run
-declare -a _FFMPEG_ARGS
-declare MEDIA_JSON
+set -o errexit -o nounset
 
 # helper
 die() {
@@ -43,7 +39,7 @@ die() {
     local stackcur=0
     
     while (( stackcur < stackheight )); do
-        echo -e "  ${FUNCNAME[${stackcur}]} at line ${BASH_LINENO[${stackcur}]} in ${BASH_SOURCE[$(( stackcur + 1 ))]}"
+        echo -e "  ${FUNCNAME[${stackcur}]} at line ${BASH_LINENO[${stackcur}]} in ${BASH_SOURCE[${stackcur}]}"
         stackcur=$(( stackcur + 1 ))
     done
 
@@ -54,28 +50,69 @@ info() {
     echo "[INFO] ${*}" 1>&2
 }
 
-# json output from ffprobe, all by default or a single
-# specific one with $1
-jffprobe() {
-    local out
-    case "${1}" in
-        "")
-            out="$(ffprobe -i "${INFILE}" \
-                -v quiet -print_format json \
-                -show_streams)"
-            ;;
-        # this must return exactly 1 stream
-        *)
-            out="$(ffprobe -i "${INFILE}" \
-                -v quiet -print_format json \
-                -show_streams -select_streams "${1#0:}")"
-            if (( $(jq '.streams | length' <<<"${out}") != 1 )); then
-                die "jffprobe ${1} didn't match exactly one stream"
-            fi
-            ;;
-    esac
-    # print via jq just in case echo might mangle something
-    jq <<<"${out}"
+# pass in ${@} args to parse
+parse_args() {
+    local args=()
+    local arg
+    for arg in "${@}"; do
+        case "${arg}" in
+            --streams=*)
+                STREAMS=( ${arg#*=} )
+                ;;
+            --alangs=*)
+                ALANGS=( ${arg#*=} )
+                ;;
+            --crop=*)
+                CROP="${arg#*=}"
+                ;;
+            --tune=*)
+                TUNE="${arg#*=}"
+                ;;
+            --vcodec=*)
+                VCODEC="${arg#*=}"
+                ;;
+            --acodec=*)
+                ACODEC="${arg#*=}"
+                ;;
+            --pretend)
+                PRETEND="true"
+                ;;
+            --*)
+                die "Unknown flag: ${arg}"
+                ;;
+            *)
+                # positional arg
+                args+=( "${arg}" )
+                ;;
+        esac
+        shift
+    done
+
+    # after parsing --flags we expect either 1 - 2 args
+    if (( ${#args[@]} < 1 )); then
+        die "Too few positional args. Expected at least 1."
+    elif (( ${#args[@]} > 2 )); then
+        die "Too many positional args. Expected at most 2."
+    fi
+
+    # arg 1 is input file
+    if [[ -f "${args[0]}" ]]; then
+        INFILE="${args[0]}"
+    else
+        die "INFILE \"${args[0]}\" doesn't exist"
+    fi
+
+    # arg 2 is output file (defaults to ${INFILE%.*}+done.mkv)
+    # if it's a dir use 2/1
+    if [[ -z "${args[1]}" ]]; then
+        OUTFILE="${INFILE%.*}+done.mkv}"
+    elif [[ -d "${args[1]}" ]]; then
+        OUTFILE="${args[1]}/${INFILE%.*}.mkv}"
+    elif [[ ! -f "${args[1]}" ]]; then
+        OUTFILE="${args[1]}"
+    else
+        die "OUTFILE \"${args[1]}\" exists"
+    fi
 }
 
 # initialise the MEDIA_JSON metadata
@@ -107,7 +144,7 @@ assert_media_json() {
 # dies on failure
 mjq() {
     assert_media_json
-    local raw
+    local raw=""
     if [[ "${1}" == "-r" ]]; then
         raw="-r"
         shift
@@ -124,9 +161,7 @@ best_astream() {
 
     assert_media_json
 
-    local query streams i
-
-    query="[ .[\"media\"].[\"track\"][] | select(.[\"@type\"] == \"Audio\")"
+    local query="[ .[\"media\"].[\"track\"][] | select(.[\"@type\"] == \"Audio\")"
 
     # limit to lang if requested
     if [[ -n "${1}" ]]; then
@@ -142,7 +177,7 @@ best_astream() {
     fi
 
     # parameters to sort by
-    queries=(
+    local queries=(
         # lossless
         "[ .[] | select(.[\"Compression Mode\"] == \"Lossless\") ]"
         # TrueHD
@@ -159,7 +194,7 @@ best_astream() {
         "[ first ]"
         )
 
-    i=0
+    local i=0
     while (( i < ${#queries[@]} )); do
         result="$(mjq "${queries[${i}]}" "${streams}")"
         # if only 1 result stream use that
@@ -181,9 +216,8 @@ stat_stream() {
         die "takes 2 args"
     fi
 
-    local query result
-    query="[ .[\"media\"].[\"track\"][] | select(.[\"StreamOrder\"] != null) ][${1}].[\"${2}\"]"
-    result="$(mjq -r "${query}" "${MEDIA_JSON}")"
+    local query="[ .[\"media\"].[\"track\"][] | select(.[\"StreamOrder\"] != null) ][${1}].[\"${2}\"]"
+    local result="$(mjq -r "${query}" "${MEDIA_JSON}")"
     
     if [[ "${result}" == null ]]; then
         die "stream ${1} or key ${2} not found"
@@ -199,11 +233,10 @@ stat_video() {
         die "takes 1 arg"
     fi
 
-    local query vstream result
-    query="[ .[\"media\"].[\"track\"][] | select(.[\"@type\"] == \"Video\") ] | first | .[\"StreamOrder\"]"
-    vstream="$(mjq -r "${query}" "${MEDIA_JSON}")"
+    local query="[ .[\"media\"].[\"track\"][] | select(.[\"@type\"] == \"Video\") ] | first | .[\"StreamOrder\"]"
+    local vstream="$(mjq -r "${query}" "${MEDIA_JSON}")"
     
-    result="$(stat_stream "${vstream}" "${1}")"
+    local result="$(stat_stream "${vstream}" "${1}")"
     
     echo -n "${result}"
 }
@@ -214,8 +247,7 @@ stat_video() {
 stat_video_height() {
     case "${CROP}" in
         ""|none)
-            local result
-            result="$(stat_video Height)"
+            local result="$(stat_video Height)"
             echo -n "${result}"
             ;;
         *)
@@ -227,11 +259,10 @@ stat_video_height() {
 # returns target gop
 # it's min(10 * FPS, 300)
 stat_video_gop() {
-    local result expr
-
-    result="$(stat_video FrameRate)"
+    local result="$(stat_video FrameRate)"
 
     # some deinterlacing filters double framerate
+    local expr
     case "$(filter_video_deinterlace 2>/dev/null)" in
         bwdif)
             expr="${result} * 10 * 2"
@@ -257,9 +288,11 @@ setup_streams() {
         type="$(stat_stream "${stream}" "@type")"
         case "${type}" in
             Audio)
+                info "Selecting stream ${stream} (${type})"
                 ASTREAMS+=( "${stream}" )
                 ;;
             Text)
+                info "Selecting stream ${stream} (${type})"
                 SSTREAMS+=( "${stream}" )
                 ;;
             *)
@@ -268,25 +301,35 @@ setup_streams() {
         esac
     done
 
-    # then then best for each selected language
+    # then then best for each selected language not manually set
+    local haslang="false"
     for lang in "${ALANGS[@]}"; do
-        ASTREAMS=( "$(best_astream "${lang}")" )
+        # skip lang if a manual stream covers it
+        for stream in "${ASTREAMS[@]}"; do
+            if [[ "${lang}" == "$(stat_stream "${stream}" "Language")" ]]; then
+                info "Language \"${lang}\" already covered by manually selected stream ${stream} - Skipping"
+                haslang="true"
+            fi
+        done
+        ${haslang} && continue
+
+        stream="$(best_astream "${lang}")"
+        info "Selecting stream ${stream} for language ${lang}"
+        ASTREAMS+=( "${stream}" )
     done
 
     # if we don't have any audio stream selected autoselect the best one
     if [[ ${#ASTREAMS[@]} -eq 0 ]]; then
-        info "Selecting best audio stream because none was selected manually"
-        ASTREAMS=( "$(best_astream)" )
+        stream="$(best_astream)"
+        info "Selecting best audio stream ${stream} because none was selected manually"
+        ASTREAMS+=( "${stream}" )
     fi
 }
 
 # check if video stream is interlaced
 # if it is apply bwdif
 filter_video_deinterlace() {
-    local scantype
-
-    scantype="$(stat_video ScanType)"
-
+    local scantype="$(stat_video ScanType)"
     case "${scantype}" in
         Interlaced)
             info "Detected interlaced video - applying bwdif filter"
@@ -302,10 +345,7 @@ filter_video_deinterlace() {
 
 # get sar filter
 filter_video_sar() {
-    local result
-
-    result="$(stat_video PixelAspectRatio)"
-
+    local result="$(stat_video PixelAspectRatio)"
     case "${result}" in
         *.*)
             info "Setting SAR ${result}"
@@ -327,8 +367,7 @@ filter_video_crop() {
 # might take a while as it decodes everything
 detect_crop() {
     info "Starting crop detection. This may take a while."
-    local crop
-    crop="$(ffmpeg -loglevel info -i "${INFILE}" \
+    local crop="$(ffmpeg -loglevel info -i "${INFILE}" \
         -vf cropdetect -map 0:v:0 -f null - 2>&1 | \
         grep "^\[Parsed_cropdetect" | tail -1 | awk '{ print $NF }')"
     CROP="${crop#crop=}"
@@ -338,33 +377,19 @@ detect_crop() {
     fi
 }
 
-# $1: stream_spec $2: tag
-get_tag_for() {
-    jffprobe "${1}" | jq --raw-output ".streams[0].tags.${2}"
-}
-
 check_env() {
+    # *STREAMS
+    # stat_stream will die if a stream isn't found
     local stream
-    # ASTREAMS
-    for stream in ${ASTREAMS}; do
-        if ! grep -E '^0:a:[0-9]+$' <<<"${stream}" >/dev/null; then
-            die "Audio stream '${stream}' invalid. Should be '0:a:X'."
-        fi
+    for stream in "${ASTREAMS[@]}" "${SSTREAMS[@]}"; do
+        stat_stream "${stream}" ID >/dev/null
     done
-    # SSTREAMS
-    for stream in ${SSTREAMS}; do
-        if ! grep -E '^0:s:[0-9]+$' <<<"${stream}" >/dev/null; then
-            die "Subtitle stream '${stream}' invalid. Should be '0:s:X'."
-        fi
-    done
+
     # CROP
     # if auto this will be re-checked after detection
     if ! grep -E '^([0-9]+:[0-9]+:[0-9]+:[0-9]+|auto|none|)$' <<<"${CROP}" >/dev/null; then
         die "Crop '${CROP}' invalid. Should be 'XXXX:XXXX:XX:XX', 'auto' or 'none'."
     fi
-    # TUNE, VCODEC, ACODEC
-    # currently handled in respective functions, maybe rebase
-    # to allow early check
     
     # *LANGS
     for lang in ${ALANGS} ${SLANGS}; do
@@ -372,8 +397,6 @@ check_env() {
             die "Lang '${lang}' invalid. Should be a 2 lowercase letter code."
         fi
     done
-
-    # TODO: disallow manual astreams + alangs
 }
 
 # video related flags
@@ -382,22 +405,22 @@ add_vflags() {
     # codec dependent options
     case "${VCODEC}" in
         libx264)
-            _FFMPEG_ARGS+=( -codec:v libx264 )
+            FFMPEG_ARGS+=( -codec:v libx264 )
             # "visually lossless"
             # at "acceptable speeds"
             # UHD-BD -> BD -> DVD
             if (( vheight > 1080 )); then
-                _FFMPEG_ARGS+=(
+                FFMPEG_ARGS+=(
                     -preset slow
                     -crf 18
                 )
             elif (( vheight > 576 )); then
-                _FFMPEG_ARGS+=(
+                FFMPEG_ARGS+=(
                     -preset slower
                     -crf 17
                 )
             else
-                _FFMPEG_ARGS+=(
+                FFMPEG_ARGS+=(
                     -preset veryslow
                     -crf 16
                 )
@@ -406,11 +429,11 @@ add_vflags() {
             case "${TUNE}" in
                 # the others don't make sense
                 film|animation|grain)
-                    _FFMPEG_ARGS+=( -tune "${TUNE}" )
+                    FFMPEG_ARGS+=( -tune "${TUNE}" )
                     ;;
                 # default to film
                 "")
-                    _FFMPEG_ARGS+=( -tune film )
+                    FFMPEG_ARGS+=( -tune film )
                     ;;
                 # special value "none" to disable
                 none) ;;
@@ -420,43 +443,43 @@ add_vflags() {
             esac
             ;;
         libx265|"")
-            _FFMPEG_ARGS+=( -codec:v libx265 )
+            FFMPEG_ARGS+=( -codec:v libx265 )
             # "visually lossless"
             # at "acceptable speeds"
             # UHD-BD -> BD -> DVD
             if (( vheight > 1080 )); then
-                _FFMPEG_ARGS+=(
+                FFMPEG_ARGS+=(
                     -preset medium
                     -crf 18
                 )
             elif (( vheight > 576 )); then
-                _FFMPEG_ARGS+=(
+                FFMPEG_ARGS+=(
                     -preset slow
                     -crf 17
                 )
             else
-                _FFMPEG_ARGS+=(
+                FFMPEG_ARGS+=(
                     -preset slow
                     -crf 16
                 )
             fi
             # always do 10bit
-            _FFMPEG_ARGS+=( -profile:v main10 -pix_fmt yuv420p10le )
+            FFMPEG_ARGS+=( -profile:v main10 -pix_fmt yuv420p10le )
             # optionally add a tune
             case "${TUNE}" in
                 # emulate a film tune
                 film|"")
-                    _FFMPEG_ARGS+=(
+                    FFMPEG_ARGS+=(
                         -x265-params "psy-rd=2.0:rdoq=2:psy-rdoq=1.5:rskip=2:deblock=-3,-3:rc-lookahead=60"
                     )
                     ;;
                 animation)
-                    _FFMPEG_ARGS+=(
+                    FFMPEG_ARGS+=(
                         -x265-params "psy-rd=0.5:rdoq=2:psy-rdoq=0.3:rskip=2:deblock=1,1:rc-lookahead=60,bframes=6:aq-strength=0.4"
                     )
                     ;;
                 grain)
-                    _FFMPEG_ARGS+=( -tune "${TUNE}" )
+                    FFMPEG_ARGS+=( -tune "${TUNE}" )
                     ;;
                 # special value "none" to disable
                 none) ;;
@@ -466,22 +489,22 @@ add_vflags() {
             esac
             ;;
         libsvtav1)
-            _FFMPEG_ARGS+=( -codec:v libsvtav1 )
+            FFMPEG_ARGS+=( -codec:v libsvtav1 )
             # "visually lossless"
             # at "acceptable speeds"
             # UHD-BD -> BD -> DVD
             if (( vheight > 1080 )); then
-                _FFMPEG_ARGS+=(
+                FFMPEG_ARGS+=(
                     -preset 5
                     -crf 10
                 )
             elif (( vheight > 576 )); then
-                _FFMPEG_ARGS+=(
+                FFMPEG_ARGS+=(
                     -preset 5
                     -crf 10
                 )
             else
-                _FFMPEG_ARGS+=(
+                FFMPEG_ARGS+=(
                     -preset 5
                     -crf 10
                 )
@@ -489,7 +512,7 @@ add_vflags() {
             # optionally add a tune
             case "${TUNE}" in
                 film|"")
-                    _FFMPEG_ARGS+=( -svtav1-params "tune=0:film-grain=8:film-grain-denoise=0:asm=avx2" )
+                    FFMPEG_ARGS+=( -svtav1-params "tune=0:film-grain=8:film-grain-denoise=0:asm=avx2" )
                     ;;
                 animation|grain)
                     die "not implemented"
@@ -508,7 +531,7 @@ add_vflags() {
 
     # codec independent options
     # GOP is 10*fps capped at 300
-    _FFMPEG_ARGS+=( -g "$(stat_video_gop)" )
+    FFMPEG_ARGS+=( -g "$(stat_video_gop)" )
 
     # setup video filters
     local vfilters=( 
@@ -517,7 +540,7 @@ add_vflags() {
         $(filter_video_crop)
     )
     IFS=","
-    _FFMPEG_ARGS+=( -filter:v "${vfilters[*]}" )
+    FFMPEG_ARGS+=( -filter:v "${vfilters[*]}" )
     unset IFS
 }
 
@@ -525,19 +548,19 @@ add_vflags() {
 add_aflags() {
     case "${ACODEC}" in
         libfdk_aac)
-            _FFMPEG_ARGS+=(
+            FFMPEG_ARGS+=(
                 -codec:a libfdk_aac
                 -vbr 5
             )
             ;;
         copy|"")
-            _FFMPEG_ARGS+=(
+            FFMPEG_ARGS+=(
                 -codec:a copy
             )
             ;;
         #libopus)
         #    local channels=$(jffprobe)
-        #    _FFMPEG_ARGS+=(
+        #    FFMPEG_ARGS+=(
         #        -codec:a libopus
         #        -b:a 128k * channels
         #        -vbr on
@@ -555,7 +578,7 @@ add_aflags() {
 # subtitle related flags
 # for now nothing fancy, just copy
 add_sflags() {
-    _FFMPEG_ARGS+=(
+    FFMPEG_ARGS+=(
         -c:s copy
     )
 }
@@ -564,26 +587,26 @@ add_sflags() {
 add_mappings() {
     local i val
     # map global metadata
-    _FFMPEG_ARGS+=( -map_metadata 0 )
+    FFMPEG_ARGS+=( -map_metadata 0 )
 
     # map video
-    _FFMPEG_ARGS+=( -map 0:v:0 )
+    FFMPEG_ARGS+=( -map 0:v:0 )
 
     # no default metadata mappings
-    _FFMPEG_ARGS+=( -map_metadata:s:v -1 )
-    _FFMPEG_ARGS+=( -map_metadata:s:a -1 )
-    _FFMPEG_ARGS+=( -map_metadata:s:s -1 )
+    FFMPEG_ARGS+=( -map_metadata:s:v -1 )
+    FFMPEG_ARGS+=( -map_metadata:s:a -1 )
+    FFMPEG_ARGS+=( -map_metadata:s:s -1 )
 
     # map audio and subtitles only keeping language and title metadata
     # audio
     i=0
     for s in "${ASTREAMS[@]}"; do
-        _FFMPEG_ARGS+=( -map "0:${s}" )
+        FFMPEG_ARGS+=( -map "0:${s}" )
         # make first track the default
-        _FFMPEG_ARGS+=( "-disposition:a:${i}" "$([[ "${i}" -eq 0 ]] && echo -n default || echo -n 0)" )
+        FFMPEG_ARGS+=( "-disposition:a:${i}" "$([[ "${i}" -eq 0 ]] && echo -n default || echo -n 0)" )
         for tag in Language Title; do
             val="$(stat_stream "${s}" "${tag}")"
-            [[ "${val}" != "null" ]] && _FFMPEG_ARGS+=( "-metadata:s:a:${i}" "${tag,,}=${val}" )
+            [[ "${val}" != "null" ]] && FFMPEG_ARGS+=( "-metadata:s:a:${i}" "${tag,,}=${val}" )
         done
         i=$(( i + 1 ))
     done
@@ -591,53 +614,34 @@ add_mappings() {
     # subtitles
     i=0
     for s in "${SSTREAMS[@]}"; do
-        _FFMPEG_ARGS+=( -map "0:${s}" )
+        FFMPEG_ARGS+=( -map "0:${s}" )
         for tag in Language Title; do
             val="$(stat_stream "${s}" "${tag}")"
-            [[ "${val}" != "null" ]] && _FFMPEG_ARGS+=( "-metadata:s:s:${i}" "${tag,,}=${val}" )
+            [[ "${val}" != "null" ]] && FFMPEG_ARGS+=( "-metadata:s:s:${i}" "${tag,,}=${val}" )
         done
         i=$(( i + 1 ))
     done
 }
 
-# setup environment
-for arg in "${@}"; do
-    case "${arg}" in
-        --streams=*)
-            STREAMS=( ${arg#*=} )
-            shift
-            ;;
-        --alangs=*)
-            ALANGS=( ${arg#*=} )
-            shift
-            ;;
-        --crop=*)
-            CROP="${arg#*=}"
-            shift
-            ;;
-        --tune=*)
-            TUNE="${arg#*=}"
-            shift
-            ;;
-        --vcodec=*)
-            VCODEC="${arg#*=}"
-            shift
-            ;;
-        --acodec=*)
-            ACODEC="${arg#*=}"
-            shift
-            ;;
-    esac
-done
+# global vars and default settings
+# cli args
+STREAMS=()
+ALANGS=()
+CROP="auto"
+TUNE=""
+VCODEC=""
+ACODEC=""
+PRETEND="false"
+# internal
+INFILE=""
+OUTFILE=""
+ASTREAMS=()
+SSTREAMS=()
+FFMPEG_ARGS=()
+MEDIA_JSON=""
 
-# needs 1 arg, a file that exists
-[[ ! -f "${1}" ]] && echo "File \"${1}\" doesn't exist." && exit 1
-
-# arg $1 is input file
-INFILE="${1}"
-
-# arg $2 is output file (defaults to ${INFILE%.*}+done.mkv)
-OUTFILE="${2:-${INFILE%.*}+done.mkv}"
+# parse args, overriding global vars
+parse_args "${@}"
 
 # setup media metada
 init_media_json
@@ -657,17 +661,17 @@ case "${CROP}" in
 esac
 
 # build ffmpeg args
-_FFMPEG_ARGS+=( -i "${INFILE}" )
+FFMPEG_ARGS+=( -i "${INFILE}" )
 add_vflags
 add_aflags
 add_sflags
 add_mappings
-_FFMPEG_ARGS+=( "${OUTFILE}" )
+FFMPEG_ARGS+=( "${OUTFILE}" )
 
 # start ffmpeg command for encode, PRETEND only echos command
-info "[cmd]: ffmpeg ${_FFMPEG_ARGS[*]}"
-[[ -z "${PRETEND}" ]] && ffmpeg "${_FFMPEG_ARGS[@]}"
+info "[cmd]: ffmpeg ${FFMPEG_ARGS[*]}"
+${PRETEND} || ffmpeg "${FFMPEG_ARGS[@]}"
 
 # add missing track stats with mkvpropedit
 info "[cmd]: mkvpropedit --add-track-statistics-tags ${OUTFILE}"
-[[ -z "${PRETEND}" ]] && mkvpropedit --add-track-statistics-tags "${OUTFILE}"
+${PRETEND} || mkvpropedit --add-track-statistics-tags "${OUTFILE}"
