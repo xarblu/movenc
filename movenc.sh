@@ -73,6 +73,9 @@ parse_args() {
         die "Too few positional args. Expected at least 1."
     elif (( ${#args[@]} > 2 )); then
         die "Too many positional args. Expected at most 2."
+    elif (( ${#args[@]} == 1 )); then
+        # avoid unbound variable
+        args[1]=""
     fi
 
     # arg 1 is input file
@@ -196,12 +199,15 @@ stat_stream() {
         die "takes 2 args"
     fi
 
-    local query="[ .[\"media\"].[\"track\"][] | select(.[\"StreamOrder\"] != null) ][${1}].[\"${2}\"]"
+    local query="[ .[\"media\"].[\"track\"][] | select(.[\"StreamOrder\"] != null) ][${1}]"
     local result="$(mjq -r "${query}" "${MEDIA_JSON}")"
     
     if [[ "${result}" == null ]]; then
-        die "stream ${1} or key ${2} not found"
+        die "stream ${1} not found"
     fi
+
+    query+=".[\"${2}\"]"
+    result="$(mjq -r "${query}" "${MEDIA_JSON}")"
 
     echo -n "${result}"
 }
@@ -295,14 +301,14 @@ setup_streams() {
         ${haslang} && continue
 
         stream="$(best_astream "${lang}")"
-        info "Selecting stream ${stream} for language ${lang}"
+        info "Selecting stream ${stream} for language ${lang} (Audio)"
         ASTREAMS+=( "${stream}" )
     done
 
     # if we don't have any audio stream selected autoselect the best one
     if [[ ${#ASTREAMS[@]} -eq 0 ]]; then
         stream="$(best_astream)"
-        info "Selecting best audio stream ${stream} because none was selected manually"
+        info "Selecting best audio stream ${stream} because none was selected manually (Audio)"
         ASTREAMS+=( "${stream}" )
     fi
 }
