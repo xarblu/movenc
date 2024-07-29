@@ -1,33 +1,13 @@
 #!/usr/bin/env bash
 
 # Usage:
-#   movenc.sh <infile> [<outfile>]
-#
-# User variables/args:
-#   CROP - ffmpeg crop filter of format xx:xx:xx:xx
-#   ASTREAMS - ffmpeg audio stream
-#   SSTREAMS - ffmpeg subtitle stream
-#   TUNE - x264 tune
+#   movenc.sh [<args>...] <infile> [<outfile>]
 #
 # Dependencies:
-# ffmpeg with needed codecs
+# ffmpeg with codecs you want to use (all currently supported libx264, libx265, libfdk_aac)
 # jq
 # mkvpropedit (mkvtoolnix)
-#
-# TODO:
-# - auto subtitle stream detection
-# - select default audio codec based on what original is
-# - default audio codec copy?
-# - av1 + opus profile
-#   - av1
-#     - psy options
-#     - grain stuff
-#     - visually lossless
-#   - opus
-#     - per stream
-#       - bitrate 128k * channels
-#       - layout mapping (mainly 5.1(side) -> 5.1)
-#       - explicit -mapping_family 0 or 1
+# mediainfo
 
 set -o errexit -o nounset
 
