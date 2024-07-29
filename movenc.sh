@@ -318,7 +318,7 @@ setup_streams() {
 filter_video_deinterlace() {
     local scantype="$(stat_video ScanType)"
     case "${scantype}" in
-        Interlaced)
+        Interlaced|MBAFF)
             info "Detected interlaced video - applying bwdif filter"
             echo -n "bwdif"
             ;;
