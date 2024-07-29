@@ -12,7 +12,8 @@ Encode movies, shows and other media in a simple unified way.
     - libx264
     - libx265 (default)
   - Audio
-    - libfdk_aac (default)
+    - libfdk_aac
+    - copy (default)
 
 ## Basic Usage
 ```
