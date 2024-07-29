@@ -105,9 +105,9 @@ parse_args() {
     # arg 2 is output file (defaults to ${INFILE%.*}+done.mkv)
     # if it's a dir use 2/1
     if [[ -z "${args[1]}" ]]; then
-        OUTFILE="${INFILE%.*}+done.mkv}"
+        OUTFILE="${INFILE%.*}+done.mkv"
     elif [[ -d "${args[1]}" ]]; then
-        OUTFILE="${args[1]}/${INFILE%.*}.mkv}"
+        OUTFILE="${args[1]%/}/${INFILE%.*}.mkv"
     elif [[ ! -f "${args[1]}" ]]; then
         OUTFILE="${args[1]}"
     else
@@ -246,7 +246,8 @@ stat_video() {
 # crop    -> crop height
 stat_video_height() {
     case "${CROP}" in
-        ""|none)
+        # auto should never be set except when PRETEND=true
+        auto|none)
             local result="$(stat_video Height)"
             echo -n "${result}"
             ;;
@@ -359,8 +360,16 @@ filter_video_sar() {
 
 # get crop filter string
 filter_video_crop() {
-    [[ -n "${CROP}" ]] && echo -n "crop=${CROP}"
-    return 0
+    case "${CROP}" in
+        none)
+            ;;
+        auto)
+            echo -n "crop=[pretending]"
+            ;;
+        *)
+            echo -n "crop=${CROP}"
+            ;;
+    esac
 }
 
 # detect crop via ffmpeg cropdetect over full video
@@ -387,12 +396,12 @@ check_env() {
 
     # CROP
     # if auto this will be re-checked after detection
-    if ! grep -E '^([0-9]+:[0-9]+:[0-9]+:[0-9]+|auto|none|)$' <<<"${CROP}" >/dev/null; then
+    if ! grep -E '^([0-9]+:[0-9]+:[0-9]+:[0-9]+|auto|none)$' <<<"${CROP}" >/dev/null; then
         die "Crop '${CROP}' invalid. Should be 'XXXX:XXXX:XX:XX', 'auto' or 'none'."
     fi
     
     # *LANGS
-    for lang in ${ALANGS} ${SLANGS}; do
+    for lang in "${ALANGS[@]}"; do
         if ! grep -E '^[a-z]{2}$' <<<"${lang}" >/dev/null; then
             die "Lang '${lang}' invalid. Should be a 2 lowercase letter code."
         fi
@@ -401,30 +410,44 @@ check_env() {
 
 # video related flags
 add_vflags() {
+    # resulution classes
+    # UHD-BD -> BD -> DVD
     local vheight="$(stat_video_height)"
+    local resclass
+    if (( vheight > 1080 )); then
+        resclass="4k"
+    elif (( vheight > 576 )); then
+        resclass="fhd"
+    else
+        resclass="sd"
+    fi
+
     # codec dependent options
     case "${VCODEC}" in
         libx264)
             FFMPEG_ARGS+=( -codec:v libx264 )
             # "visually lossless"
             # at "acceptable speeds"
-            # UHD-BD -> BD -> DVD
-            if (( vheight > 1080 )); then
-                FFMPEG_ARGS+=(
-                    -preset slow
-                    -crf 18
-                )
-            elif (( vheight > 576 )); then
-                FFMPEG_ARGS+=(
-                    -preset slower
-                    -crf 17
-                )
-            else
-                FFMPEG_ARGS+=(
-                    -preset veryslow
-                    -crf 16
-                )
-            fi
+            case "${resclass}" in
+                4k)
+                    FFMPEG_ARGS+=(
+                        -preset slow
+                        -crf 18
+                    )
+                    ;;
+                fhd)
+                    FFMPEG_ARGS+=(
+                        -preset slower
+                        -crf 17
+                    )
+                    ;;
+                sd)
+                    FFMPEG_ARGS+=(
+                        -preset veryslow
+                        -crf 16
+                    )
+                    ;;
+            esac
             # optionally add a tune
             case "${TUNE}" in
                 # the others don't make sense
@@ -446,23 +469,26 @@ add_vflags() {
             FFMPEG_ARGS+=( -codec:v libx265 )
             # "visually lossless"
             # at "acceptable speeds"
-            # UHD-BD -> BD -> DVD
-            if (( vheight > 1080 )); then
-                FFMPEG_ARGS+=(
-                    -preset medium
-                    -crf 18
-                )
-            elif (( vheight > 576 )); then
-                FFMPEG_ARGS+=(
-                    -preset slow
-                    -crf 17
-                )
-            else
-                FFMPEG_ARGS+=(
-                    -preset slow
-                    -crf 16
-                )
-            fi
+            case "${resclass}" in
+                4k)
+                    FFMPEG_ARGS+=(
+                        -preset medium
+                        -crf 18
+                    )
+                    ;;
+                fhd)
+                    FFMPEG_ARGS+=(
+                        -preset slow
+                        -crf 17
+                    )
+                    ;;
+                sd)
+                    FFMPEG_ARGS+=(
+                        -preset slow
+                        -crf 16
+                    )
+                    ;;
+            esac
             # always do 10bit
             FFMPEG_ARGS+=( -profile:v main10 -pix_fmt yuv420p10le )
             # optionally add a tune
@@ -492,23 +518,26 @@ add_vflags() {
             FFMPEG_ARGS+=( -codec:v libsvtav1 )
             # "visually lossless"
             # at "acceptable speeds"
-            # UHD-BD -> BD -> DVD
-            if (( vheight > 1080 )); then
-                FFMPEG_ARGS+=(
-                    -preset 5
-                    -crf 10
-                )
-            elif (( vheight > 576 )); then
-                FFMPEG_ARGS+=(
-                    -preset 5
-                    -crf 10
-                )
-            else
-                FFMPEG_ARGS+=(
-                    -preset 5
-                    -crf 10
-                )
-            fi
+            case "${resclass}" in
+                4k)
+                    FFMPEG_ARGS+=(
+                        -preset 5
+                        -crf 10
+                    )
+                    ;;
+                fhd)
+                    FFMPEG_ARGS+=(
+                        -preset 5
+                        -crf 10
+                    )
+                    ;;
+                sd)
+                    FFMPEG_ARGS+=(
+                        -preset 5
+                        -crf 10
+                    )
+                    ;;
+            esac
             # optionally add a tune
             case "${TUNE}" in
                 film|"")
@@ -651,14 +680,12 @@ init_media_json
 setup_streams
 
 # check if created environment is sane
-#check_env
+check_env
 
 # auto detect crop by default
-case "${CROP}" in
-    auto|"") detect_crop ;;
-    none) unset CROP ;;
-    *) ;;
-esac
+if [[ "${CROP}" == auto ]]; then
+    ${PRETEND} || detect_crop
+fi
 
 # build ffmpeg args
 FFMPEG_ARGS+=( -i "${INFILE}" )
