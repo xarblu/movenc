@@ -161,16 +161,10 @@ best_astream() {
 
     # parameters to sort by
     local queries=(
-        # lossless
-        "[ .[] | select(.[\"Compression Mode\"] == \"Lossless\") ]"
-        # TrueHD
-        "[ .[] | select(.[\"CodecID\"] == \"A_TRUEHD\") ]"
-        # DTS
-        "[ .[] | select(.[\"CodecID\"] == \"A_DTS\") ]"
-        # AC3
-        "[ .[] | select(.[\"CodecID\"] == \"A_AC3\") ]"
         # most channels
         "[ (sort_by(.[\"Channels\"] | tonumber) | reverse | .[0][\"Channels\"] | tonumber) as \$max | .[] | select(.[\"Channels\"] | tonumber == \$max) ]"
+        # lossless
+        "[ .[] | select(.[\"Compression Mode\"] == \"Lossless\") ]"
         # highest avg bitrate
         "[ (sort_by(.[\"BitRate\"] | tonumber) | reverse | .[0][\"BitRate\"] | tonumber) as \$max | .[] | select(.[\"BitRate\"] | tonumber == \$max) ]"
         # fall back to using the first stream left
