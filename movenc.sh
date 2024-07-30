@@ -156,21 +156,15 @@ best_astream() {
     streams="$(mjq "${query}" "${MEDIA_JSON}")"
 
     if [[ "$(mjq "length" "${streams}")" -eq 0 ]]; then
-        die "No stream found"
+        die "No stream found for query ${query}"
     fi
 
     # parameters to sort by
     local queries=(
-        # lossless
-        "[ .[] | select(.[\"Compression Mode\"] == \"Lossless\") ]"
-        # TrueHD
-        "[ .[] | select(.[\"CodecID\"] == \"A_TRUEHD\") ]"
-        # DTS
-        "[ .[] | select(.[\"CodecID\"] == \"A_DTS\") ]"
-        # AC3
-        "[ .[] | select(.[\"CodecID\"] == \"A_AC3\") ]"
         # most channels
         "[ (sort_by(.[\"Channels\"] | tonumber) | reverse | .[0][\"Channels\"] | tonumber) as \$max | .[] | select(.[\"Channels\"] | tonumber == \$max) ]"
+        # lossless
+        "[ .[] | select(.[\"Compression Mode\"] == \"Lossless\") ]"
         # highest avg bitrate
         "[ (sort_by(.[\"BitRate\"] | tonumber) | reverse | .[0][\"BitRate\"] | tonumber) as \$max | .[] | select(.[\"BitRate\"] | tonumber == \$max) ]"
         # fall back to using the first stream left
@@ -212,18 +206,36 @@ stat_stream() {
     echo -n "${result}"
 }
 
+# usage: stat_stream_type <type> <id> <mediainfo key>
+# resolves a typeid among streams of that type
+stat_stream_type() {
+    if [[ ${#} -ne 3 ]]; then
+        die "takes 3 args"
+    fi
+    local type="${1}"
+    local id="${2}"
+    local key="${3}"
+
+    # query global stream and hand to stat_stream
+    local query="[ .[\"media\"].[\"track\"][] | select(.[\"@type\"] == \"${type}\") ][${id}][\"StreamOrder\"]"
+    local stream="$(mjq -r "${query}" "${MEDIA_JSON}")"
+    if [[ "${stream}" == null ]]; then
+        die "Stream ${type}:${id} not found"
+    fi
+
+    local result="$(stat_stream "${stream}" "${key}")"
+    echo -n "${result}"
+}
+
 # usage: stat_video <mediainfo key>
 # like stat_stream
 stat_video() {
     if [[ ${#} -ne 1 ]]; then
         die "takes 1 arg"
     fi
-
-    local query="[ .[\"media\"].[\"track\"][] | select(.[\"@type\"] == \"Video\") ] | first | .[\"StreamOrder\"]"
-    local vstream="$(mjq -r "${query}" "${MEDIA_JSON}")"
+    local key="${1}"
     
-    local result="$(stat_stream "${vstream}" "${1}")"
-    
+    local result="$(stat_stream_type Video 0 "${key}")"
     echo -n "${result}"
 }
 
@@ -268,24 +280,40 @@ stat_video_gop() {
 setup_streams() {
     ASTREAMS=()
     SSTREAMS=()
-    local stream type lang
+    local stream id type lang
 
     # first map the manual streams
     for stream in "${STREAMS[@]}"; do
-        type="$(stat_stream "${stream}" "@type")"
-        case "${type}" in
-            Audio)
-                info "Selecting stream ${stream} (${type})"
-                ASTREAMS+=( "${stream}" )
+        # resolve type ids
+        case "${stream}" in
+            a:*)
+                id="$(stat_stream_type Audio "${stream#*:}" StreamOrder)"
                 ;;
-            Text)
-                info "Selecting stream ${stream} (${type})"
-                SSTREAMS+=( "${stream}" )
+            s:*)
+                id="$(stat_stream_type Text "${stream#*:}" StreamOrder)"
                 ;;
             *)
-                die "Unknown stream (${stream}) or stream type (${type})"
+                id="${stream}"
                 ;;
         esac
+
+        type="$(stat_stream "${id}" "@type")"
+        case "${type}" in
+            Audio)
+                ASTREAMS+=( "${id}" )
+                ;;
+            Text)
+                SSTREAMS+=( "${id}" )
+                ;;
+            *)
+                die "Unknown stream (${id}) or stream type (${type})"
+                ;;
+        esac
+        if [[ "${stream}" != "${id}" ]]; then
+            info "Selecting stream ${id} (${type}) (resolved from ${stream})"
+        else
+            info "Selecting stream ${id} (${type})"
+        fi
     done
 
     # then then best for each selected language not manually set
@@ -318,7 +346,7 @@ setup_streams() {
 filter_video_deinterlace() {
     local scantype="$(stat_video ScanType)"
     case "${scantype}" in
-        Interlaced)
+        Interlaced|MBAFF)
             info "Detected interlaced video - applying bwdif filter"
             echo -n "bwdif"
             ;;
@@ -417,19 +445,19 @@ add_vflags() {
             case "${resclass}" in
                 4k)
                     FFMPEG_ARGS+=(
-                        -preset slow
+                        -preset:v slow
                         -crf 18
                     )
                     ;;
                 fhd)
                     FFMPEG_ARGS+=(
-                        -preset slower
+                        -preset:v slower
                         -crf 17
                     )
                     ;;
                 sd)
                     FFMPEG_ARGS+=(
-                        -preset veryslow
+                        -preset:v veryslow
                         -crf 16
                     )
                     ;;
@@ -458,19 +486,19 @@ add_vflags() {
             case "${resclass}" in
                 4k)
                     FFMPEG_ARGS+=(
-                        -preset medium
+                        -preset:v medium
                         -crf 18
                     )
                     ;;
                 fhd)
                     FFMPEG_ARGS+=(
-                        -preset slow
+                        -preset:v slow
                         -crf 17
                     )
                     ;;
                 sd)
                     FFMPEG_ARGS+=(
-                        -preset slow
+                        -preset:v slow
                         -crf 16
                     )
                     ;;
@@ -507,19 +535,19 @@ add_vflags() {
             case "${resclass}" in
                 4k)
                     FFMPEG_ARGS+=(
-                        -preset 5
+                        -preset:v 5
                         -crf 10
                     )
                     ;;
                 fhd)
                     FFMPEG_ARGS+=(
-                        -preset 5
+                        -preset:v 5
                         -crf 10
                     )
                     ;;
                 sd)
                     FFMPEG_ARGS+=(
-                        -preset 5
+                        -preset:v 5
                         -crf 10
                     )
                     ;;
