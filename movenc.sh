@@ -445,19 +445,19 @@ add_vflags() {
             case "${resclass}" in
                 4k)
                     FFMPEG_ARGS+=(
-                        -preset slow
+                        -preset:v slow
                         -crf 18
                     )
                     ;;
                 fhd)
                     FFMPEG_ARGS+=(
-                        -preset slower
+                        -preset:v slower
                         -crf 17
                     )
                     ;;
                 sd)
                     FFMPEG_ARGS+=(
-                        -preset veryslow
+                        -preset:v veryslow
                         -crf 16
                     )
                     ;;
@@ -486,19 +486,19 @@ add_vflags() {
             case "${resclass}" in
                 4k)
                     FFMPEG_ARGS+=(
-                        -preset medium
+                        -preset:v medium
                         -crf 18
                     )
                     ;;
                 fhd)
                     FFMPEG_ARGS+=(
-                        -preset slow
+                        -preset:v slow
                         -crf 17
                     )
                     ;;
                 sd)
                     FFMPEG_ARGS+=(
-                        -preset slow
+                        -preset:v slow
                         -crf 16
                     )
                     ;;
@@ -535,19 +535,19 @@ add_vflags() {
             case "${resclass}" in
                 4k)
                     FFMPEG_ARGS+=(
-                        -preset 5
+                        -preset:v 5
                         -crf 10
                     )
                     ;;
                 fhd)
                     FFMPEG_ARGS+=(
-                        -preset 5
+                        -preset:v 5
                         -crf 10
                     )
                     ;;
                 sd)
                     FFMPEG_ARGS+=(
-                        -preset 5
+                        -preset:v 5
                         -crf 10
                     )
                     ;;
