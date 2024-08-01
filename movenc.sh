@@ -534,28 +534,32 @@ add_vflags() {
             # at "acceptable speeds"
             case "${resclass}" in
                 4k)
+                    die "not tuned yet"
                     FFMPEG_ARGS+=(
                         -preset:v 5
-                        -crf 10
+                        -crf 18
                     )
                     ;;
                 fhd)
                     FFMPEG_ARGS+=(
                         -preset:v 5
-                        -crf 10
+                        -crf 17
                     )
                     ;;
                 sd)
+                    die "not tuned yet"
                     FFMPEG_ARGS+=(
                         -preset:v 5
-                        -crf 10
+                        -crf 16
                     )
                     ;;
             esac
+            # always do 10bit
+            FFMPEG_ARGS+=( -profile:v main -pix_fmt yuv420p10le )
             # optionally add a tune
             case "${TUNE}" in
                 film|"")
-                    FFMPEG_ARGS+=( -svtav1-params "tune=0:film-grain=8:film-grain-denoise=0:asm=avx2" )
+                    FFMPEG_ARGS+=( -svtav1-params "tune=2:film-grain-denoise=0:film-grain=10:enable-qm=1:qm-min=0:qm-max=15:enable-variance-boost=1:variance-boost-strength=3:variance-octile=4:asm=avx2" )
                     ;;
                 animation|grain)
                     die "not implemented"
