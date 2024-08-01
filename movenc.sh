@@ -438,6 +438,11 @@ add_vflags() {
 
     # codec dependent options
     case "${VCODEC}" in
+        copy)
+            # just set codec to copy and don't process video further
+            FFMPEG_ARGS+=( -codec:v copy )
+            return
+            ;;
         libx264)
             FFMPEG_ARGS+=( -codec:v libx264 )
             # "visually lossless"
@@ -701,7 +706,7 @@ setup_streams
 check_env
 
 # auto detect crop by default
-if [[ "${CROP}" == auto ]]; then
+if [[ "${CROP}" == auto ]] && [[ "${VCODEC}" != copy ]]; then
     ${PRETEND} || detect_crop
 fi
 
