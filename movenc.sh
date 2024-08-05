@@ -326,9 +326,9 @@ setup_streams() {
                 ;;
         esac
         if [[ "${stream}" != "${id}" ]]; then
-            info "Selecting stream ${id} (${type}) (resolved from ${stream})"
+            info "Selecting stream \"${id}\" (${type}) (resolved from \"${stream}\")"
         else
-            info "Selecting stream ${id} (${type})"
+            info "Selecting stream \"${id}\" (${type})"
         fi
     done
 
@@ -338,7 +338,7 @@ setup_streams() {
         # skip lang if a manual stream covers it
         for stream in "${ASTREAMS[@]}"; do
             if [[ "${lang}" == "$(stat_stream "${stream}" "Language")" ]]; then
-                info "Language \"${lang}\" already covered by manually selected stream ${stream} - Skipping"
+                info "Language \"${lang}\" already covered by manually selected stream \"${stream}\" - Skipping"
                 haslang="true"
             fi
         done
@@ -346,7 +346,7 @@ setup_streams() {
 
         stream="$(best_astream "${lang}")"
         if [[ -n "${stream}" ]]; then
-            info "Selecting stream ${stream} for language ${lang} (Audio)"
+            info "Selecting stream \"${stream}\" for language \"${lang}\" (Audio)"
             ASTREAMS+=( "${stream}" )
         fi
     done
@@ -356,7 +356,7 @@ setup_streams() {
     if [[ ${#ASTREAMS[@]} -eq 0 ]]; then
         stream="$(best_astream "any")"
         if [[ -n "${stream}" ]]; then
-            info "Selecting best audio stream ${stream} because none was selected manually (Audio)"
+            info "Selecting best audio stream \"${stream}\" because none was selected manually (Audio)"
             ASTREAMS+=( "${stream}" )
         fi
     fi
