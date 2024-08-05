@@ -459,7 +459,7 @@ add_vflags() {
 
     # codec dependent options
     case "${VCODEC}" in
-        copy|"")
+        copy)
             # just set codec to copy and don't process video further
             FFMPEG_ARGS+=( -codec:v copy )
             return
@@ -493,10 +493,6 @@ add_vflags() {
                 # the others don't make sense
                 film|animation|grain)
                     FFMPEG_ARGS+=( -tune "${TUNE}" )
-                    ;;
-                # default to film
-                "")
-                    FFMPEG_ARGS+=( -tune film )
                     ;;
                 # special value "none" to disable
                 none) ;;
@@ -534,7 +530,7 @@ add_vflags() {
             # optionally add a tune
             case "${TUNE}" in
                 # emulate a film tune
-                film|"")
+                film)
                     FFMPEG_ARGS+=(
                         -x265-params "psy-rd=2.0:rdoq=2:psy-rdoq=1.5:rskip=2:deblock=-3,-3:rc-lookahead=60"
                     )
@@ -584,7 +580,7 @@ add_vflags() {
             FFMPEG_ARGS+=( -profile:v main -pix_fmt yuv420p10le )
             # optionally add a tune
             case "${TUNE}" in
-                film|"")
+                film)
                     FFMPEG_ARGS+=( -svtav1-params "tune=2:film-grain-denoise=0:film-grain=10:enable-qm=1:qm-min=0:qm-max=15:enable-variance-boost=1:variance-boost-strength=3:variance-octile=4:asm=avx2" )
                     ;;
                 animation|grain)
@@ -626,7 +622,7 @@ add_aflags() {
                 -vbr 5
             )
             ;;
-        copy|"")
+        copy)
             FFMPEG_ARGS+=(
                 -codec:a copy
             )
@@ -701,9 +697,9 @@ add_mappings() {
 STREAMS=()
 ALANGS=()
 CROP="auto"
-TUNE=""
-VCODEC=""
-ACODEC=""
+TUNE="film"
+VCODEC="copy"
+ACODEC="copy"
 PRETEND="false"
 # internal
 INFILE=""
