@@ -138,17 +138,28 @@ mjq() {
 # select the best quality audio stream for language $1
 # returns the ffmpeg stream id if found else dies
 best_astream() {
-    if [[ ${#} -eq 1 ]] && [[ ${#1} -ne 2 ]]; then
-        die "lang should be a 2 letter identifier"
-    fi
+    local lang required
+    case "${1:-}" in
+        ??|"any")
+            lang="${1}"
+            required=true
+            ;;
+        ??"?"|"any?")
+            lang="${1%"?"}"
+            required=false
+            ;;
+        *)
+            die "Unknown language specifier: ${1}"
+            ;;
+    esac
 
     assert_media_json
 
     local query="[ .[\"media\"].[\"track\"][] | select(.[\"@type\"] == \"Audio\")"
 
     # limit to lang if requested
-    if [[ -n "${1}" ]]; then
-        query+=" | select(.[\"Language\"] == \"${1}\")"
+    if [[ "${lang}" != "any" ]]; then
+        query+=" | select(.[\"Language\"] == \"${lang}\")"
     fi
 
     query+=" ]"
@@ -156,7 +167,12 @@ best_astream() {
     streams="$(mjq "${query}" "${MEDIA_JSON}")"
 
     if [[ "$(mjq "length" "${streams}")" -eq 0 ]]; then
-        die "No stream found for query ${query}"
+        if ${required}; then
+            die "No required stream found for lang \"${lang}\""
+        else
+            info "No optional stream found for lang \"${lang}\""
+            return
+        fi
     fi
 
     # parameters to sort by
@@ -329,15 +345,20 @@ setup_streams() {
         ${haslang} && continue
 
         stream="$(best_astream "${lang}")"
-        info "Selecting stream ${stream} for language ${lang} (Audio)"
-        ASTREAMS+=( "${stream}" )
+        if [[ -n "${stream}" ]]; then
+            info "Selecting stream ${stream} for language ${lang} (Audio)"
+            ASTREAMS+=( "${stream}" )
+        fi
     done
 
     # if we don't have any audio stream selected autoselect the best one
+    # TODO: select best for all available langs
     if [[ ${#ASTREAMS[@]} -eq 0 ]]; then
-        stream="$(best_astream)"
-        info "Selecting best audio stream ${stream} because none was selected manually (Audio)"
-        ASTREAMS+=( "${stream}" )
+        stream="$(best_astream "any")"
+        if [[ -n "${stream}" ]]; then
+            info "Selecting best audio stream ${stream} because none was selected manually (Audio)"
+            ASTREAMS+=( "${stream}" )
+        fi
     fi
 }
 
@@ -416,8 +437,8 @@ check_env() {
     
     # *LANGS
     for lang in "${ALANGS[@]}"; do
-        if ! grep -E '^[a-z]{2}$' <<<"${lang}" >/dev/null; then
-            die "Lang '${lang}' invalid. Should be a 2 lowercase letter code."
+        if ! grep -E '^[a-z]{2}\??|any$' <<<"${lang}" >/dev/null; then
+            die "Lang '${lang}' invalid. Should be a 2 lowercase letter code, optionally with \"?\" suffix or \"any\""
         fi
     done
 }
@@ -438,7 +459,7 @@ add_vflags() {
 
     # codec dependent options
     case "${VCODEC}" in
-        copy)
+        copy|"")
             # just set codec to copy and don't process video further
             FFMPEG_ARGS+=( -codec:v copy )
             return
@@ -484,7 +505,7 @@ add_vflags() {
                     ;;
             esac
             ;;
-        libx265|"")
+        libx265)
             FFMPEG_ARGS+=( -codec:v libx265 )
             # "visually lossless"
             # at "acceptable speeds"

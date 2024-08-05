@@ -10,7 +10,8 @@ Encode movies, shows and other media in a simple unified way.
 - Profiles
   - Video
     - libx264
-    - libx265 (default)
+    - libx265
+    - copy (default)
   - Audio
     - libfdk_aac
     - copy (default)
