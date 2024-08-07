@@ -347,13 +347,15 @@ setup_streams() {
     done
 
     # then then best for each selected language not manually set
-    local haslang="false"
+    local haslang
     for lang in "${ALANGS[@]}"; do
+        haslang="false"
         # skip lang if a manual stream covers it
         for stream in "${ASTREAMS[@]}"; do
-            if [[ "${lang}" == "$(stat_stream "${stream}" "Language")" ]]; then
+            if [[ "${lang}" == "$(stat_stream "${stream}" "Language")"* ]]; then
                 info "Language \"${lang}\" already covered by manually selected stream \"${stream}\" - Skipping"
                 haslang="true"
+                break
             fi
         done
         ${haslang} && continue
