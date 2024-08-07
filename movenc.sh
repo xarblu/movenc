@@ -91,10 +91,24 @@ parse_args() {
         OUTFILE="${INFILE%.*}+done.mkv"
     elif [[ -d "${args[1]}" ]]; then
         OUTFILE="${args[1]%/}/${INFILE%.*}.mkv"
-    elif [[ ! -f "${args[1]}" ]]; then
-        OUTFILE="${args[1]}"
     else
+        OUTFILE="${args[1]}"
+    fi
+    # if that file exists error
+    if [[ -f "${OUTFILE}" ]]; then
         die "OUTFILE \"${args[1]}\" exists"
+    fi
+}
+
+setup_crossfs() {
+    [[ -f "${OUTFILE}" ]] && die "OUTFILE should not exist!"
+    touch "${OUTFILE}"
+    local inmnt="$(stat --printf=%m "${INFILE}")"
+    local outmnt="$(stat --printf=%m "${OUTFILE}")"
+    rm "${OUTFILE}"
+    if [[ "${inmnt}" != "${outmnt}" ]]; then
+        info "INFILE and OUTFILE are on different mountpoints - using local tmpdir"
+        TMPDIR="$(mktemp -d -p . movenc.XXXXXXXXXX)"
     fi
 }
 
@@ -708,9 +722,15 @@ ASTREAMS=()
 SSTREAMS=()
 FFMPEG_ARGS=()
 MEDIA_JSON=""
+TMPDIR=""
 
 # parse args, overriding global vars
 parse_args "${@}"
+
+# detect if INFILE and OUTFILE are on different mountpoints
+# if they are TMPDIR will be set and used for processing
+# and the final result will be sent to OUTFILE once it's done
+setup_crossfs
 
 # setup media metada
 init_media_json
@@ -733,12 +753,27 @@ add_vflags
 add_aflags
 add_sflags
 add_mappings
-FFMPEG_ARGS+=( "${OUTFILE}" )
+if [[ -n "${TMPDIR}" ]] && [[ -d "${TMPDIR}" ]]; then
+    FFMPEG_ARGS+=( "${TMPDIR}/${OUTFILE##*/}" )
+else
+    FFMPEG_ARGS+=( "${OUTFILE}" )
+fi
 
 # start ffmpeg command for encode, PRETEND only echos command
 info "[cmd]: ffmpeg ${FFMPEG_ARGS[*]}"
 ${PRETEND} || ffmpeg "${FFMPEG_ARGS[@]}"
 
 # add missing track stats with mkvpropedit
-info "[cmd]: mkvpropedit --add-track-statistics-tags ${OUTFILE}"
-${PRETEND} || mkvpropedit --add-track-statistics-tags "${OUTFILE}"
+if [[ -n "${TMPDIR}" ]] && [[ -d "${TMPDIR}" ]]; then
+    info "[cmd]: mkvpropedit --add-track-statistics-tags \"${TMPDIR}/${OUTFILE##*/}\""
+    ${PRETEND} || mkvpropedit --add-track-statistics-tags "${TMPDIR}/${OUTFILE##*/}"
+    info "[cmd]: cp \"${TMPDIR}/${OUTFILE##*/}\" \"${OUTFILE}\""
+    ${PRETEND} || cp "${TMPDIR}/${OUTFILE##*/}" "${OUTFILE}"
+    info "[cmd]: rm \"${TMPDIR}/${OUTFILE##*/}\""
+    ${PRETEND} || rm "${TMPDIR}/${OUTFILE##*/}"
+    # dont pretend rmdir or we get tempdir hell
+    rmdir "${TMPDIR}"
+else
+    info "[cmd]: mkvpropedit --add-track-statistics-tags \"${OUTFILE}\""
+    ${PRETEND} || mkvpropedit --add-track-statistics-tags "${OUTFILE}"
+fi
