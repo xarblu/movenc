@@ -196,6 +196,7 @@ best_astream() {
         # lossless
         "[ .[] | select(.[\"Compression Mode\"] == \"Lossless\") ]"
         # highest avg bitrate
+        # TODO: BitRate can be "num / num"
         "[ (sort_by(.[\"BitRate\"] | tonumber) | reverse | .[0][\"BitRate\"] | tonumber) as \$max | .[] | select(.[\"BitRate\"] | tonumber == \$max) ]"
         # fall back to using the first stream left
         "[ first ]"
