@@ -120,6 +120,14 @@ class Muxer():
         self.texttracks: list = []
 
     def addTrack(self, id: str):
+        # handle forced tag
+        if id.endswith("!"):
+            forced = True
+        else:
+            forced = False
+
+        id = id.rstrip("!")
+
         # if we can convert id to int it's a global id
         try:
             id = int(id)
@@ -135,8 +143,14 @@ class Muxer():
                 tracktype = "Text"
             id = int(id)
 
-
+        # query
         track = self.infile.getTrack(id=id, tracktype=tracktype)
+
+        # change default and forced state
+        track["Default"] = "No" # TODO
+        track["Forced"] = "Yes" if forced else "No"
+
+        # add
         if track["@type"] == "Video":
             self.videotracks.append(track)
         elif track["@type"] == "Audio":
@@ -203,41 +217,30 @@ class Muxer():
         # per infile options
         # included tracks
         
+        # add tracks
         if videotracks:
             cmd += ["--video-tracks", ",".join(videotrackids)]
-            for i in range(len(videotracks)):
-                cmd += ["--default-track-flag"]
-                # 1st track is default
-                if i == 0:
-                    cmd += [videotracks[i]["StreamOrder"] + ":1"]
-                else:
-                    cmd += [videotracks[i]["StreamOrder"] + ":0"]
-                cmd += ["--forced-display-flag", videotracks[i]["StreamOrder"] + ":0"]
         else:
             cmd += ["--no-video"]
 
         if audiotracks:
             cmd += ["--audio-tracks", ",".join(audiotrackids)]
-            for i in range(len(audiotracks)):
-                cmd += ["--default-track-flag"]
-                # 1st track is default
-                if i == 0:
-                    cmd += [audiotracks[i]["StreamOrder"] + ":1"]
-                else:
-                    cmd += [audiotracks[i]["StreamOrder"] + ":0"]
-                cmd += ["--forced-display-flag", audiotracks[i]["StreamOrder"] + ":0"]
         else:
             cmd += ["--no-audio"]
 
         if texttracks:
             cmd += ["--subtitle-tracks", ",".join(texttrackids)]
-            for i in range(len(texttracks)):
-                cmd += ["--default-track-flag"]
-                cmd += [texttracks[i]["StreamOrder"] + ":0"]
-                cmd += ["--forced-display-flag", texttracks[i]["StreamOrder"] + ":0"]
         else:
-            cmd += ["--no-audio"]
+            cmd += ["--no-subtitles"]
 
+        # setup default and forced flags
+        for track in videotracks + audiotracks + texttracks:
+            cmd += ["--default-track-flag",
+                    track["StreamOrder"] + (":1" if track["Default"] == "Yes" else ":0")]
+            cmd += ["--forced-display-flag",
+                    track["StreamOrder"] + (":1" if track["Forced"] == "Yes" else ":0")]
+
+        # add file
         cmd += [self.infile.file]
 
         # print and run
@@ -248,7 +251,7 @@ class Muxer():
 
 def parse_args():
     parser = argparse.ArgumentParser(
-            prog = "movmuxer",
+            prog = os.path.basename(sys.argv[0]),
             description = "MUX MOVies"
             )
     parser.add_argument("infile", type = str, nargs = 1,
@@ -258,7 +261,7 @@ def parse_args():
     parser.add_argument("--langs",  type = str, nargs = 1, required = True,
                         help = "Audio Languages - 2 letter country codes, optional if suffixed with '?' or special values 'any', 'none'")
     parser.add_argument("--tracks", type = str, nargs = 1,
-                        help = "Manual track selection")
+                        help = "Manual track selection - global id, type id (<type>:id), optional suffix '!' - mark 'forced'")
     parser.add_argument("--pretend", const = True, default = False, action = "store_const",
                         help = "Print commands instead of executing")
     args = parser.parse_args()
