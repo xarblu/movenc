@@ -54,14 +54,20 @@ class MediaFile():
             if channels > maxchannels:
                 maxchannels = channels
 
-        found = [track for track in tracks if int(track["Channels"]) == maxchannels]
+        try:
+            found = [track for track in tracks if int(track["Channels"]) == maxchannels]
+        except KeyError:
+            found = []
         if found:
             tracks = found
         if len(tracks) == 1:
             return tracks[0]
 
         # select lossless audio
-        found = [track for track in tracks if track["Compression_Mode"] == "Lossless"]
+        try:
+            found = [track for track in tracks if track["Compression_Mode"] == "Lossless"]
+        except KeyError:
+            found = []
         if found:
             tracks = found
         if len(tracks) == 1:
@@ -76,7 +82,10 @@ class MediaFile():
             if bitrate > maxbitrate:
                 maxbitrate = bitrate
 
-        found = [track for track in tracks if int(track["BitRate"].split("/")[0]) == maxbitrate]
+        try:
+            found = [track for track in tracks if int(track["BitRate"].split("/")[0]) == maxbitrate]
+        except KeyError:
+            found = []
         if found:
             tracks = found
         if len(tracks) == 1:
